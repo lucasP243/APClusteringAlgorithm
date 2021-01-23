@@ -1,3 +1,5 @@
+#pragma warning(disable:4996)
+
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -18,7 +20,7 @@ typedef struct
 
 // Affinity Propagation declarations
 
-#define MAX_ITER 200
+#define MAX_ITER INT_MAX
 #define DAMPING_FACTOR 0.5f
 
 Matrix* sim; // similarity matrix
@@ -26,14 +28,16 @@ Matrix* res; // responsibility matrix
 Matrix* ava; // availability matrix
 Matrix* cri; // criterion matrix
 
+void damping(Matrix* new, Matrix* old);
+
 void computeSimilarity(Matrix* data);
 void computeResponsibility();
 void computeAvailability();
 void computeCriterion();
 
-void damping(Matrix* new, Matrix* old);
+Matrix* extractExemplars();
 
-void affinityPropagation(Matrix* data);
+Matrix* affinityPropagation(Matrix* data);
 
 void affinityPropagationDebug();
 
@@ -53,13 +57,47 @@ void displayMatrix(FILE* out, Matrix* m);
 
 void error(char* msg);
 
+struct size_file findSize(FILE* fdata);
+
+Matrix* loadData(char* path);
+
 ///////////////////////////////////////////////////////////////////////////////
 
 // ENTRY POINT
 
 int main(int argc, char* argv[])
 {
-	affinityPropagationDebug();
+	if (argc < 2)
+	{
+		error("Usage : >> apcalg path_to_data_file");
+		return -1;
+	}
+	else
+	{
+		char* path = argv[1];
+		if (strcmp(path, "debug_test") == 0)
+		{
+			affinityPropagationDebug();
+		}
+		else
+		{
+			Matrix* data = loadData(path);
+			Matrix* result = affinityPropagation(data);
+
+			FILE* out = fopen("result.txt", "w");
+			if (out == NULL)
+			{
+				error("Failed to create file.");
+			}
+			else
+			{
+				displayMatrix(out, result);
+			}
+
+			deleteMatrix(data);
+			deleteMatrix(result);
+		}
+	}
 	return 0;
 }
 
@@ -179,6 +217,7 @@ void computeCriterion()
 	{
 		for (size_t j = 0; j < cri->nCols; j++)
 		{
+			// C(i,j) = R(i,j) + A(i,j)
 			cri->value[i][j] = res->value[i][j] + ava->value[i][j];
 		}
 	}
@@ -199,9 +238,29 @@ void damping(Matrix* new, Matrix* old)
 	}
 }
 
+Matrix* extractExemplars()
+{
+	// For each individual (row), the column with the highest value defines
+	// this individual's best choice for exemplar
+	Matrix* exe = createMatrix(cri->nRows, cri->nCols);
+	for (size_t i = 0; i < exe->nRows; i++)
+	{
+		int m = INT_MIN;
+		for (size_t j = 0; j < cri->nCols; j++)
+		{
+			m = max(cri->value[i][j], m);
+		}
+		for (size_t j = 0; j < exe->nCols; j++)
+		{
+			exe->value[i][j] = (cri->value[i][j] == m);
+		}
+	}
+	return exe;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
-void affinityPropagation(Matrix* data)
+Matrix* affinityPropagation(Matrix* data)
 {
 	// Initialize all matrices.
 	sim = createMatrix(data->nRows, data->nRows);
@@ -235,19 +294,21 @@ void affinityPropagation(Matrix* data)
 
 	} while (!isStable && nIter < MAX_ITER);
 
-	deleteMatrix(oldRes);
-	deleteMatrix(oldAva);
-
 	computeCriterion();
+	Matrix* exemplars = extractExemplars();
 
 	deleteMatrix(sim);
 	deleteMatrix(res);
 	deleteMatrix(ava);
+	deleteMatrix(cri);
+
+	return exemplars;
 }
 
 void affinityPropagationDebug()
 {
 	Matrix* data = createMatrix(5, 5);
+	Matrix* expected = createMatrix(5, 5);
 	int staticData[5][5] =
 	{
 		{3, 4, 3, 2, 1},
@@ -255,64 +316,28 @@ void affinityPropagationDebug()
 		{3, 5, 3, 3, 3},
 		{2, 1, 3, 3, 2},
 		{1, 1, 3, 2, 3}
+	}; 
+	int staticResult[5][5] =
+	{
+		{1, 0, 0, 0, 0},
+		{1, 0, 0, 0, 0},
+		{1, 0, 0, 0, 0},
+		{0, 0, 0, 1, 0},
+		{0, 0, 0, 1, 0}
 	};
 
 	for (size_t i = 0; i < 5; i++)
 	{
 		memcpy(data->value[i], staticData[i], 5 * sizeof(int));
+		memcpy(expected->value[i], staticResult[i], 5 * sizeof(int));
 	}
-	
-	printf("Data :\n");
-	displayMatrix(stdout, data);
 
-	// Initialize all matrices.
-	sim = createMatrix(data->nRows, data->nRows);
-	res = createMatrix(data->nRows, data->nRows);
-	ava = createMatrix(data->nRows, data->nRows);
-	cri = createMatrix(data->nRows, data->nRows);
+	Matrix* result = affinityPropagation(data);
+	printf(equalsMatrix(expected, result) ? "test ok\n" : "test failed\n");
 
-	Matrix* oldRes;
-	Matrix* oldAva;
-
-	computeSimilarity(data);
-
-	printf("\nSimilarity :\n");
-	displayMatrix(stdout, sim);
-
-	int isStable = 0;
-	do
-	{
-		system("PAUSE");
-
-		oldRes = copyMatrix(res);
-		computeResponsibility();
-		damping(res, oldRes);
-
-		printf("\nResponsibility :\n");
-		displayMatrix(stdout, res);
-
-		oldAva = copyMatrix(ava);
-		computeAvailability();
-		damping(ava, oldAva);
-
-		printf("\nAvailability :\n");
-		displayMatrix(stdout, ava);
-
-		isStable = equalsMatrix(res, oldRes) && equalsMatrix(ava, oldAva);
-
-		deleteMatrix(oldRes);
-		deleteMatrix(oldAva);
-
-	} while (!isStable);
-
-	computeCriterion();
-
-	deleteMatrix(sim);
-	deleteMatrix(res);
-	deleteMatrix(ava);
-
-	printf("\nCriterion :\n");
-	displayMatrix(stdout, cri);
+	deleteMatrix(data);
+	deleteMatrix(expected);
+	deleteMatrix(result);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -343,7 +368,7 @@ Matrix* createMatrix(size_t nRows, size_t nCols)
 				m->value[i] = calloc(nCols, sizeof(int));
 				if (m->value[i] == NULL)
 				{
-					error("Failed to create Matrix.value col");
+					error("Failed to create Matrix.value[i]");
 				}
 			}
 		}
@@ -392,6 +417,10 @@ Matrix* copyMatrix(Matrix* src)
 
 void deleteMatrix(Matrix* m)
 {
+	for (size_t i = 0; i < m->nRows; i++)
+	{
+		free(m->value[i]);
+	}
 	free(m->value);
 	free(m);
 }
@@ -432,4 +461,67 @@ void displayMatrix(FILE* out, Matrix* m)
 void error(char* msg)
 {
 	fprintf(stderr, msg);
+}
+
+struct size_file
+{
+	int row;
+	int col;
+};
+
+struct size_file findSize(FILE* fdata)
+{
+	rewind(fdata);
+	struct size_file res = { .row = 0, .col = 0};
+	char line[1024];
+	char* token;
+
+	while (fgets(line, sizeof(line), fdata))
+	{
+		res.row++;
+		res.col = 0;
+		token = strtok(line, ";");
+
+		while (token != NULL)
+		{
+			res.col++;
+			token = strtok(NULL, ";");
+		}
+	}
+	rewind(fdata);
+	return res;
+}
+
+Matrix* loadData(char* path)
+{
+	FILE* fdata = fopen(path, "r");
+	if (fdata != NULL)
+	{
+		struct size_file len = findSize(fdata);
+
+		Matrix* data = createMatrix(len.row, len.col);
+		char line[1024];
+		char* token;
+		int i = 0;
+		int j = 0;
+
+		while (fgets(line, sizeof(line), fdata))
+		{
+			token = strtok(line, ";");
+			j = 0;
+
+			do
+			{
+				data->value[i][j++] = (int)strtol(token, NULL, 10);
+			} while ((token = strtok(NULL, ";")) != NULL);
+			i++;
+		}
+		fclose(fdata);
+		return data;
+	}
+	else
+	{
+		error("Failed to open file.");
+		return NULL;
+	}
 }
